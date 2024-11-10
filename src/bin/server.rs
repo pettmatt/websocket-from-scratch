@@ -25,7 +25,26 @@ async fn routing(
             )))
         },
         (&Method::GET, "/websocket") => {
-            Ok(Response::new(request.into_body().boxed()))
+            let connection_upgrade = request.headers().get("Upgrade").unwrap();
+
+            if connection_upgrade != "websocket" {
+                // Ok(error(
+                //     StatusCode::NOT_ACCEPTABLE,
+                //     "Unacceptable Upgrade value"
+                // ));
+            }
+
+            let (parts, _body) = request.into_parts();
+            let message = parts.headers
+                .iter()
+                .map(|(key, value)| {
+                    let key_str = key.as_str();
+                    let value_str = value.to_str().unwrap_or_default();
+                    format!("{}: {}", key_str, value_str)
+                }
+            ).collect::<Vec<_>>().join("\n");
+
+            Ok(Response::new(full(message)))
         },
         // Return 404 Not Found for other routes.
         _ => {
@@ -49,6 +68,9 @@ fn full<T: Into<Bytes>>(chunk: T) -> BoxBody<Bytes, hyper::Error> {
         .boxed()
 }
 
+// fn error<T: Into<Bytes>>(status: StatusCode, message: T) -> Response<BoxBody<Bytes, Infallible>> {
+// }
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let address = SocketAddr::from(([127, 0, 0, 1], 3000));
@@ -59,14 +81,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // We start a loop to continuously accept incoming connections
     loop {
         let (stream, _) = listener.accept().await?;
-
-        println!("Stream {:?}", stream);
         
         // Use an adapter to access something implementing `tokio::io` traits as if they implement
         // `hyper::rt` IO traits.
         let io = TokioIo::new(stream);
-
-        println!("IO {:?}", io);
         
         // Spawn a tokio task to serve multiple connections concurrently
         tokio::task::spawn(async move {
