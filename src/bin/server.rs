@@ -1,6 +1,7 @@
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::future::Future;
+use std::u16;
 
 use http_body_util::{Full, BodyExt, combinators::BoxBody};
 use hyper::body::{Bytes, Frame};
@@ -21,17 +22,20 @@ async fn routing(
     match (request.method(), request.uri().path()) {
         (&Method::GET, "/") => {
             Ok(Response::new(full(
-                "Try POSTing data to /websocket",
+                "Try to request /websocket",
             )))
         },
         (&Method::GET, "/websocket") => {
-            let connection_upgrade = request.headers().get("Upgrade").unwrap();
+            let upgrade_header = request.headers().get("Upgrade")
+                .and_then(|header| header.to_str().ok())
+                .unwrap_or("Missing Upgrade value");
 
-            if connection_upgrade != "websocket" {
-                // Ok(error(
-                //     StatusCode::NOT_ACCEPTABLE,
-                //     "Unacceptable Upgrade value"
-                // ));
+            if upgrade_header != "websocket" {
+                let error_response = error(
+                    StatusCode::NOT_ACCEPTABLE,
+                    String::from("Unacceptable Upgrade value")
+                );
+                return Ok(error_response);
             }
 
             let (parts, _body) = request.into_parts();
@@ -55,7 +59,7 @@ async fn routing(
     }
 }
 
-// Utility functions for routing
+// Functions to create the body of a request
 fn empty() -> BoxBody<Bytes, hyper::Error> {
     http_body_util::Empty::<Bytes>::new()
         .map_err(|never| match never {})
@@ -66,6 +70,14 @@ fn full<T: Into<Bytes>>(chunk: T) -> BoxBody<Bytes, hyper::Error> {
     Full::new(chunk.into())
         .map_err(|never| match never {})
         .boxed()
+}
+
+fn error<T: Into<Bytes>>(status_code: StatusCode, message: T) -> Response<BoxBody<Bytes, hyper::Error>> {
+    Response::builder()
+        .status(status_code)
+        .header("Content-Type", "text/plain")
+        .body(full(message))
+        .expect("Failed to process request")
 }
 
 // fn error<T: Into<Bytes>>(status: StatusCode, message: T) -> Response<BoxBody<Bytes, Infallible>> {
@@ -81,21 +93,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // We start a loop to continuously accept incoming connections
     loop {
         let (stream, _) = listener.accept().await?;
-        
+
         // Use an adapter to access something implementing `tokio::io` traits as if they implement
         // `hyper::rt` IO traits.
         let io = TokioIo::new(stream);
-        
+
         // Spawn a tokio task to serve multiple connections concurrently
         tokio::task::spawn(async move {
-            // Finally, we bind the incoming connection to our `hello` service
             let builder = http1::Builder::new();
             if let Err(error) = builder
                 // `service_fn` converts our function in a `Service`
                 .serve_connection(io, service_fn(routing))
                 .await
             {
-                eprintln!("Error serving connection: {:?}", error);
+                eprintln!("Error serving connection: {:?}", error.to_string());
+            } else {
+                println!("Serving connection");
             }
         });
     }
