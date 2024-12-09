@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::time;
@@ -10,12 +11,40 @@ use hyper::{Request, Response, Method, StatusCode};
 use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
 
+fn validate_websocket_header(key_value: &str) -> Option<String> {
+    // Pass rating as argument
+    let value_priority = vec![
+        ("chat", 1),
+        ("superchat", 2)
+    ];
+
+    let values: Vec<&str> = key_value.split(", ").collect();
+
+    let mut most_valuable = None;
+    let mut highest_priority = -1;
+
+    for value in values {
+        let value = value.trim();
+
+        if let Some(priority) = value_priority.iter()
+            .find_map(|(v, p)| if *v == value { Some(*p) } else { None }) {
+                if priority > highest_priority {
+                    highest_priority = priority;
+                    most_valuable = Some(value.to_string());
+                }
+        }
+    }
+
+    most_valuable
+}
+
 // Service that return simple 200 response.
 async fn hello(_: Request<hyper::body::Incoming>) -> Result<Response<Full<Bytes>>, Infallible> {
     Ok(Response::new(Full::new(Bytes::from("Hello, World!"))))
 }
 
 async fn routing(request: Request<hyper::body::Incoming>) -> Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
+    
     match request.method() {
         &Method::GET => {
             match request.uri().path() {
@@ -43,6 +72,13 @@ async fn routing(request: Request<hyper::body::Incoming>) -> Result<Response<Box
                         .map(|(key, value)| {
                             let key_str = key.as_str();
                             let value_str = value.to_str().unwrap_or_default();
+                            let mut validated_websocket_protocol = None;
+
+                            if key_str == "sec-websocket-protocol" {
+                                validated_websocket_protocol = validate_websocket_header(value_str);
+                                return format!("{}: {}", key_str, validated_websocket_protocol.unwrap());
+                            }
+
                             format!("{}: {}", key_str, value_str)
                         }
                     ).collect::<Vec<_>>().join("\n");
