@@ -1,23 +1,21 @@
-use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::time;
 
+use base64::Engine;
 use http_body_util::{Full, BodyExt, combinators::BoxBody};
-use hyper::body::{Bytes, Frame};
+use hyper::body::Bytes;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response, Method, StatusCode};
 use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
 
-fn validate_websocket_header(key_value: &str) -> Option<String> {
-    // Pass rating as argument
-    let value_priority = vec![
-        ("chat", 1),
-        ("superchat", 2)
-    ];
+use base64::engine::general_purpose::STANDARD as base64;
+use sha1::{Digest, Sha1};
 
+fn validate_websocket_header(key_value: &str, value_priority_list: Vec<(&str, i32)>) -> Option<String> {
+    // value_priority_list should contain valid string(s) and its priority value. "*" allows any value.
     let values: Vec<&str> = key_value.split(", ").collect();
 
     let mut most_valuable = None;
@@ -26,7 +24,7 @@ fn validate_websocket_header(key_value: &str) -> Option<String> {
     for value in values {
         let value = value.trim();
 
-        if let Some(priority) = value_priority.iter()
+        if let Some(priority) = value_priority_list.iter()
             .find_map(|(v, p)| if *v == value { Some(*p) } else { None }) {
                 if priority > highest_priority {
                     highest_priority = priority;
@@ -74,9 +72,38 @@ async fn routing(request: Request<hyper::body::Incoming>) -> Result<Response<Box
                             let value_str = value.to_str().unwrap_or_default();
                             let mut validated_websocket_protocol = None;
 
+                            // Todo: create more elegant way of checking headers and returning an error when validated_websocket_protocol returns None.
                             if key_str == "sec-websocket-protocol" {
-                                validated_websocket_protocol = validate_websocket_header(value_str);
+                                let value_priority_list = vec![
+                                    ("chat", 1),
+                                    ("superchat", 2)
+                                ];
+                                validated_websocket_protocol = validate_websocket_header(value_str, value_priority_list);
                                 return format!("{}: {}", key_str, validated_websocket_protocol.unwrap());
+                            }
+
+                            if key_str == "origin" {
+                                let value_priority_list = vec![
+                                    ("http://example.com", 1)
+                                ];
+                                validated_websocket_protocol = validate_websocket_header(value_str, value_priority_list);
+                                return format!("{}: {}", key_str, validated_websocket_protocol.unwrap());
+                            }
+
+                            if key_str == "sec-websocket-key" {
+                                // Globally Unique Identifier (GUID)
+                                let websocket_guid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+                                let concatenated = format!("{}{}", key_str, websocket_guid);
+
+                                // Compute the SHA-1 hash
+                                let mut hasher = Sha1::new();
+                                hasher.update(concatenated.as_bytes());
+                                let hash = hasher.finalize();
+
+                                // Base64-encode the hash
+                                let accept_value = base64.encode(hash);
+
+                                return format!("Sec-WebSocket-Accept: {}", accept_value);
                             }
 
                             format!("{}: {}", key_str, value_str)
