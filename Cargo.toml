@@ -8,3 +8,5 @@ http-body-util = "0.1.2"
 hyper = { version = "1.5.0", features = ["full"] }
 tokio = { version = "1.41.1", features = ["full"] }
 hyper-util = { version = "0.1.10", features = ["tokio", "server"] }
+sha1 = "0.10.6"
+base64 = "0.22.1"
