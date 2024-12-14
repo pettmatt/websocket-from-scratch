@@ -29,3 +29,4 @@ https://www.rfc-editor.org/rfc/rfc6455
   - Header's `Sec-WebSocket-Key` value
   - WebSocket GUID, a fixed globally unique identifier specified in RFC 6455
 - [ ] The client handshake
+- [ ] Closing handshake

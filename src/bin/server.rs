@@ -1,12 +1,13 @@
 use std::convert::Infallible;
+use std::future::IntoFuture;
 use std::net::SocketAddr;
 use std::time;
 
-use base64::Engine;
 use http_body_util::{Full, BodyExt, combinators::BoxBody};
 use hyper::body::Bytes;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
+use hyper::upgrade::{Upgraded, OnUpgrade};
 use hyper::{Request, Response, Method, StatusCode};
 use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
@@ -41,8 +42,9 @@ async fn hello(_: Request<hyper::body::Incoming>) -> Result<Response<Full<Bytes>
     Ok(Response::new(Full::new(Bytes::from("Hello, World!"))))
 }
 
+async fn handle_websocket(upgraded: Upgraded) {}
+
 async fn routing(request: Request<hyper::body::Incoming>) -> Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
-    
     match request.method() {
         &Method::GET => {
             match request.uri().path() {
@@ -62,6 +64,18 @@ async fn routing(request: Request<hyper::body::Incoming>) -> Result<Response<Box
                             String::from("Unacceptable Upgrade value")
                         );
                         return Ok(error_response);
+                    }
+
+                    // Check if request contains end frame (to end the handshake)
+                    // Start the websocket session
+                    if let Some(upgrade) = request.extensions().get::<OnUpgrade>() {
+                        tokio::spawn(async move {
+                            if let Ok(upgraded) = upgrade.into_future().await {
+                                if let error = handle_websocket(upgraded).await {
+                                    eprintln!("WebSocket error: {:?}", error);
+                                }
+                            }
+                        });
                     }
         
                     let (parts, _body) = request.into_parts();
@@ -151,16 +165,13 @@ fn error<T: Into<Bytes>>(status_code: StatusCode, message: T) -> Response<BoxBod
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let address = SocketAddr::from(([127, 0, 0, 1], 3000));
-
-    // We create a TcpListener and bind it to 127.0.0.1:3000
     let listener = TcpListener::bind(address).await?;
 
-    // We start a loop to continuously accept incoming connections
     loop {
         let (stream, _) = listener.accept().await?;
 
         // Use an adapter to access something implementing `tokio::io` traits as if they implement `hyper::rt` IO traits.
-        let io = TokioIo::new(stream);
+        let io_stream = TokioIo::new(stream);
 
         // Spawn a tokio task to serve multiple connections concurrently
         tokio::task::spawn(async move {
@@ -168,7 +179,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let builder = http1::Builder::new();
             // `service_fn` converts our function to a `Service`
             if let Err(error) = builder
-                .serve_connection(io, service_fn(routing))
+                .serve_connection(io_stream, service_fn(routing))
                 .await
             {
                 eprintln!("Error serving connection: {:?}", error.to_string());
